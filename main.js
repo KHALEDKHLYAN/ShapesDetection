@@ -2,43 +2,104 @@
 
 $(function () {
     const video = $("video")[0];
-    let model;
-    let cameraMode = "environment"; // or "user"
+
+    var model;
+    var cameraMode = "environment"; // or "user"
 
     const startVideoStreamPromise = navigator.mediaDevices
-        .getUserMedia({ audio: false, video: { facingMode: cameraMode } })
-        .then(stream => new Promise(resolve => {
-            video.srcObject = stream;
-            video.onloadeddata = () => {
-                video.play();
+        .getUserMedia({
+            audio: false,
+            video: {
+                facingMode: cameraMode
+            }
+        })
+        .then(function (stream) {
+            return new Promise(function (resolve) {
+                video.srcObject = stream;
+                video.onloadeddata = function () {
+                    video.play();
+                    resolve();
+                };
+            });
+        });
+
+    var publishable_key = "rf_TV1AXOV0jBYt02DPg0stwRyqeY13";
+    var toLoad = {
+        model: "shapes-recognition",
+        version: 4
+    };
+
+    const loadModelPromise = new Promise(function (resolve, reject) {
+        roboflow
+            .auth({
+                publishable_key: publishable_key
+            })
+            .load(toLoad)
+            .then(function (m) {
+                model = m;
                 resolve();
-            };
-        }));
+            });
+    });
 
-    const publishable_key = "rf_TV1AXOV0jBYt02DPg0stwRyqeY13";
-    const toLoad = { model: "shapes-recognition", version: 4 };
-
-    const loadModelPromise = roboflow.auth({ publishable_key })
-        .load(toLoad)
-        .then(m => { model = m; });
-
-    Promise.all([startVideoStreamPromise, loadModelPromise]).then(() => {
+    Promise.all([startVideoStreamPromise, loadModelPromise]).then(function () {
         $("body").removeClass("loading");
         resizeCanvas();
         detectFrame();
     });
 
-    let canvas = $("<canvas/>")[0];
-    const ctx = canvas.getContext("2d");
+    var canvas, ctx;
     const font = "16px sans-serif";
 
-    function resizeCanvas() {
-        const dimensions = videoDimensions(video);
+    function videoDimensions(video) {
+        // Ratio of the video's intrisic dimensions
+        var videoRatio = video.videoWidth / video.videoHeight;
 
-        canvas.width = dimensions.width;
-        canvas.height = dimensions.height;
+        // The width and height of the video element
+        var width = video.offsetWidth,
+            height = video.offsetHeight;
 
-        $(canvas).css({
+        // The ratio of the element's width to its height
+        var elementRatio = width / height;
+
+        // If the video element is short and wide
+        if (elementRatio > videoRatio) {
+            width = height * videoRatio;
+        } else {
+            // It must be tall and thin, or exactly equal to the original ratio
+            height = width / videoRatio;
+        }
+
+        return {
+            width: width,
+            height: height
+        };
+    }
+
+    $(window).resize(function () {
+        resizeCanvas();
+    });
+
+    const resizeCanvas = function () {
+        $("canvas").remove();
+
+        canvas = $("<canvas/>");
+
+        ctx = canvas[0].getContext("2d");
+
+        var dimensions = videoDimensions(video);
+
+        console.log(
+            video.videoWidth,
+            video.videoHeight,
+            video.offsetWidth,
+            video.offsetHeight,
+            dimensions
+        );
+
+        canvas[0].width = video.videoWidth;
+        canvas[0].height = video.videoHeight;
+
+        canvas.css({
             width: dimensions.width,
             height: dimensions.height,
             left: ($(window).width() - dimensions.width) / 2,
@@ -46,64 +107,71 @@ $(function () {
         });
 
         $("body").append(canvas);
-    }
+    };
 
-    function videoDimensions(video) {
-        const videoRatio = video.videoWidth / video.videoHeight;
-        let width = video.offsetWidth, height = video.offsetHeight;
-        const elementRatio = width / height;
+    const renderPredictions = function (predictions) {
+        var dimensions = videoDimensions(video);
 
-        if (elementRatio > videoRatio) {
-            width = height * videoRatio;
-        } else {
-            height = width / videoRatio;
-        }
+        var scale = 1;
 
-        return { width, height };
-    }
+        ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
-    function renderPredictions(predictions) {
-        const scale = 1;
-
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        predictions.forEach(prediction => {
+        predictions.forEach(function (prediction) {
             const x = prediction.bbox.x;
             const y = prediction.bbox.y;
+
             const width = prediction.bbox.width;
             const height = prediction.bbox.height;
 
+            // Draw the bounding box.
             ctx.strokeStyle = prediction.color;
             ctx.lineWidth = 4;
-            ctx.strokeRect((x - width / 2) / scale, (y - height / 2) / scale, width / scale, height / scale);
+            ctx.strokeRect(
+                (x - width / 2) / scale,
+                (y - height / 2) / scale,
+                width / scale,
+                height / scale
+            );
 
+            // Draw the label background.
             ctx.fillStyle = prediction.color;
             const textWidth = ctx.measureText(prediction.class).width;
-            const textHeight = parseInt(font, 10);
-            ctx.fillRect((x - width / 2) / scale, (y - height / 2) / scale, textWidth + 8, textHeight + 4);
+            const textHeight = parseInt(font, 10); // base 10
+            ctx.fillRect(
+                (x - width / 2) / scale,
+                (y - height / 2) / scale,
+                textWidth + 8,
+                textHeight + 4
+            );
         });
 
-        predictions.forEach(prediction => {
+        predictions.forEach(function (prediction) {
             const x = prediction.bbox.x;
             const y = prediction.bbox.y;
+
             const width = prediction.bbox.width;
             const height = prediction.bbox.height;
 
+            // Draw the text last to ensure it's on top.
             ctx.font = font;
             ctx.textBaseline = "top";
             ctx.fillStyle = "#000000";
-            ctx.fillText(prediction.class, (x - width / 2) / scale + 4, (y - height / 2) / scale + 1);
+            ctx.fillText(
+                prediction.class,
+                (x - width / 2) / scale + 4,
+                (y - height / 2) / scale + 1
+            );
         });
-    }
+    };
 
-    let prevTime;
-    let pastFrameTimes = [];
-
-    function detectFrame() {
+    var prevTime;
+    var pastFrameTimes = [];
+    const detectFrame = function () {
         if (!model) return requestAnimationFrame(detectFrame);
 
-        model.detect(video)
-            .then(predictions => {
+        model
+            .detect(video)
+            .then(function (predictions) {
                 requestAnimationFrame(detectFrame);
                 renderPredictions(predictions);
 
@@ -111,15 +179,19 @@ $(function () {
                     pastFrameTimes.push(Date.now() - prevTime);
                     if (pastFrameTimes.length > 30) pastFrameTimes.shift();
 
-                    const total = pastFrameTimes.reduce((acc, t) => acc + t / 1000, 0);
-                    const fps = pastFrameTimes.length / total;
+                    var total = 0;
+                    _.each(pastFrameTimes, function (t) {
+                        total += t / 1000;
+                    });
+
+                    var fps = pastFrameTimes.length / total;
                     $("#fps").text(Math.round(fps));
                 }
                 prevTime = Date.now();
             })
-            .catch(e => {
-                console.error("Error:", e);
+            .catch(function (e) {
+                console.log("CAUGHT", e);
                 requestAnimationFrame(detectFrame);
             });
-    }
+    };
 });
